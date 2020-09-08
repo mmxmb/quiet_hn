@@ -69,9 +69,9 @@ func isStoryLink(item item) bool {
 
 func parseHNItem(hnItem hn.Item) item {
 	ret := item{Item: hnItem}
-	url, err := url.Parse(ret.URL)
+	u, err := url.Parse(ret.URL)
 	if err == nil {
-		ret.Host = strings.TrimPrefix(url.Hostname(), "www.")
+		ret.Host = strings.TrimPrefix(u.Hostname(), "www.")
 	}
 	return ret
 }
