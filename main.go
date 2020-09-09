@@ -29,8 +29,7 @@ func main() {
 }
 
 // getStories gets all items with id in ids from HN API and returns a map from item.ID to item
-func getStories(ids []int) []item {
-	var client hn.Client
+func getStories(ids []int, client hn.Client) []item {
 	itemChan := make(chan item, len(ids))
 
 	// get HN items with ID in ids concurrently
@@ -78,7 +77,7 @@ func handler(numStories int, tpl *template.Template) http.HandlerFunc {
 		// attempt getting more stories until we get sufficient number
 		for len(stories) < numStories {
 			numRemaining := numStories - len(stories)
-			stories = append(stories, getStories(ids[idx:idx+numRemaining])...)
+			stories = append(stories, getStories(ids[idx:idx+numRemaining], client)...)
 			idx += numRemaining
 		}
 
