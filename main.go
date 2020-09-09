@@ -28,6 +28,40 @@ func main() {
 	log.Fatal(http.ListenAndServe(fmt.Sprintf(":%d", port), nil))
 }
 
+// getStories gets all items with id in ids from HN API and returns a map from item.ID to item
+func getStories(ids []int) []item {
+	var client hn.Client
+	itemChan := make(chan item, len(ids))
+
+	// get HN items with ID in ids concurrently
+	for _, id := range ids {
+		go func(id int) {
+			hnItem, err := client.GetItem(id)
+			if err != nil {
+				return
+			}
+			itemChan <- parseHNItem(hnItem)
+		}(id)
+	}
+
+	ret := filterStories(itemChan, len(ids))
+	close(itemChan)
+
+	return ret
+}
+
+// filterStories consumes numItems items from itemChan and returns slice of items, each item is a story
+func filterStories(itemChan <-chan item, numItems int) []item {
+	ret := make([]item, 0, numItems)
+	for i := 0; i < numItems; i++ {
+		itm := <-itemChan
+		if isStoryLink(itm) {
+			ret = append(ret, itm)
+		}
+	}
+	return ret
+}
+
 func handler(numStories int, tpl *template.Template) http.HandlerFunc {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
@@ -37,22 +71,20 @@ func handler(numStories int, tpl *template.Template) http.HandlerFunc {
 			http.Error(w, "Failed to load top stories", http.StatusInternalServerError)
 			return
 		}
-		var stories []item
-		for _, id := range ids {
-			hnItem, err := client.GetItem(id)
-			if err != nil {
-				continue
-			}
-			item := parseHNItem(hnItem)
-			if isStoryLink(item) {
-				stories = append(stories, item)
-				if len(stories) >= numStories {
-					break
-				}
-			}
+
+		idx := 0
+		stories := make([]item, 0, numStories)
+
+		// attempt getting more stories until we get sufficient number
+		for len(stories) < numStories {
+			numRemaining := numStories - len(stories)
+			stories = append(stories, getStories(ids[idx:idx+numRemaining])...)
+			idx += numRemaining
 		}
+
+		sortedStories := sortStories(stories, ids) // get sorted slice of stories using ids
 		data := templateData{
-			Stories: stories,
+			Stories: sortedStories,
 			Time:    time.Now().Sub(start),
 		}
 		err = tpl.Execute(w, data)
@@ -61,6 +93,29 @@ func handler(numStories int, tpl *template.Template) http.HandlerFunc {
 			return
 		}
 	})
+}
+
+// sortStories sorts stories so that the order of story.ID of each story
+// is the same as order of each id in orderedIDs
+func sortStories(stories []item, orderedIDs []int) []item {
+	// create a map from item.ID to item
+	m := make(map[int]item)
+	for _, story := range stories {
+		m[story.ID] = story
+	}
+
+	// orderedIDs determine the order of stories in the output slice (based on story.ID)
+	ret := make([]item, 0, len(orderedIDs))
+	for _, id := range orderedIDs {
+		itm, ok := m[id]
+		if ok {
+			ret = append(ret, itm)
+		}
+		if len(ret) >= len(stories) {
+			break
+		}
+	}
+	return ret
 }
 
 func isStoryLink(item item) bool {
