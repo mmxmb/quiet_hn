@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/mmxmb/quiet_hn/hn"
@@ -21,8 +22,9 @@ func main() {
 	flag.Parse()
 
 	tpl := template.Must(template.ParseFiles("./index.gohtml"))
+	cache := &Cache{ExpirationDuration: 10 * time.Second}
 
-	http.HandleFunc("/", handler(numStories, tpl))
+	http.HandleFunc("/", handler(cache, numStories, tpl))
 
 	// Start the server
 	log.Fatal(http.ListenAndServe(fmt.Sprintf(":%d", port), nil))
@@ -61,8 +63,13 @@ func filterStories(itemChan <-chan item, numItems int) []item {
 	return ret
 }
 
-func getTopStories(ids []int, numStories int) []item {
+func getTopStories(numStories int) ([]item, error) {
 	var client hn.Client
+	ids, err := client.TopItems()
+	if err != nil {
+		return nil, err
+	}
+
 	idx := 0
 	stories := make([]item, 0, numStories)
 
@@ -73,24 +80,27 @@ func getTopStories(ids []int, numStories int) []item {
 		idx += numRemaining
 	}
 
-	return sortStories(stories, ids) // get sorted slice of stories using ids
+	return sortStories(stories, ids), nil // get sorted slice of stories using ids
 }
 
-func handler(numStories int, tpl *template.Template) http.HandlerFunc {
+func handler(cache *Cache, numStories int, tpl *template.Template) http.HandlerFunc {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
-		var client hn.Client
-		ids, err := client.TopItems()
-		if err != nil {
-			http.Error(w, "Failed to load top stories", http.StatusInternalServerError)
-			return
+
+		if cache.IsExpired() || cache.IsEmpty() {
+			stories, err := getTopStories(numStories)
+			if err != nil {
+				http.Error(w, "Failed to load top stories", http.StatusInternalServerError)
+				return
+			}
+			cache.Set(stories)
 		}
 
 		data := templateData{
-			Stories: getTopStories(ids, numStories),
+			Stories: cache.Get(),
 			Time:    time.Now().Sub(start),
 		}
-		err = tpl.Execute(w, data)
+		err := tpl.Execute(w, data)
 		if err != nil {
 			http.Error(w, "Failed to process the template", http.StatusInternalServerError)
 			return
@@ -143,4 +153,34 @@ type item struct {
 type templateData struct {
 	Stories []item
 	Time    time.Duration
+}
+
+type Cache struct {
+	items              []item
+	ExpirationDuration time.Duration
+	expiration         time.Time
+	mu                 sync.RWMutex
+}
+
+func (c *Cache) IsExpired() bool {
+	return time.Now().Sub(c.expiration) > 0
+}
+
+func (c *Cache) IsEmpty() bool {
+	return len(c.items) == 0
+}
+
+func (c *Cache) Set(items []item) {
+	c.mu.Lock()
+	c.expiration = time.Now().Add(c.ExpirationDuration)
+	c.items = items
+	c.mu.Unlock()
+}
+
+func (c *Cache) Get() []item {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	items := make([]item, len(c.items))
+	copy(items, c.items)
+	return items
 }
