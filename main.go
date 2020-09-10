@@ -61,6 +61,21 @@ func filterStories(itemChan <-chan item, numItems int) []item {
 	return ret
 }
 
+func getTopStories(ids []int, numStories int) []item {
+	var client hn.Client
+	idx := 0
+	stories := make([]item, 0, numStories)
+
+	// attempt getting more stories until we get sufficient number
+	for len(stories) < numStories {
+		numRemaining := numStories - len(stories)
+		stories = append(stories, getStories(ids[idx:idx+numRemaining], client)...)
+		idx += numRemaining
+	}
+
+	return sortStories(stories, ids) // get sorted slice of stories using ids
+}
+
 func handler(numStories int, tpl *template.Template) http.HandlerFunc {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
@@ -71,19 +86,8 @@ func handler(numStories int, tpl *template.Template) http.HandlerFunc {
 			return
 		}
 
-		idx := 0
-		stories := make([]item, 0, numStories)
-
-		// attempt getting more stories until we get sufficient number
-		for len(stories) < numStories {
-			numRemaining := numStories - len(stories)
-			stories = append(stories, getStories(ids[idx:idx+numRemaining], client)...)
-			idx += numRemaining
-		}
-
-		sortedStories := sortStories(stories, ids) // get sorted slice of stories using ids
 		data := templateData{
-			Stories: sortedStories,
+			Stories: getTopStories(ids, numStories),
 			Time:    time.Now().Sub(start),
 		}
 		err = tpl.Execute(w, data)
